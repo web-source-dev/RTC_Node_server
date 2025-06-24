@@ -76,8 +76,177 @@ app.get('/api/protected', auth, (req, res) => {
   });
 });
 
+app.get('/api/health', (req, res) => {
+  try {
+    const memoryUsage = process.memoryUsage();
+    const uptime = process.uptime();
+    
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: Math.round(uptime),
+      memory: {
+        heapUsed: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+        heapTotal: Math.round(memoryUsage.heapTotal / 1024 / 1024),
+        external: Math.round(memoryUsage.external / 1024 / 1024),
+        rss: Math.round(memoryUsage.rss / 1024 / 1024)
+      },
+      rooms: {
+        count: Object.keys(rooms).length,
+        maxRooms: MAX_ROOMS_IN_MEMORY
+      },
+      sessions: {
+        count: Object.keys(sessions).length
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      error: error.message
+    });
+  }
+});
+
 const rooms = {};
 const sessions = {};
+
+// Memory management
+const MAX_ROOMS_IN_MEMORY = 50;
+const ROOM_CLEANUP_INTERVAL = 15 * 60 * 1000; // 15 minutes instead of 30
+const SESSION_CLEANUP_INTERVAL = 10 * 60 * 1000; // 10 minutes instead of 15
+const MEMORY_PRESSURE_THRESHOLD = 1500; // MB
+
+// Rate limiting for attention data
+const attentionDataRateLimit = new Map();
+const ATTENTION_RATE_LIMIT = 500; // 0.5 seconds between updates per room for better UX
+const BURST_LIMIT = 10; // Allow up to 10 updates in a burst
+const BURST_WINDOW = 5000; // 5 second window for burst counting
+const DISABLE_RATE_LIMIT_UNDER_MB = 1000; // Disable rate limiting when memory usage is under 1GB
+
+function cleanupMemory() {
+  try {
+    const now = new Date();
+    const roomExpireTime = 12 * 60 * 60 * 1000; // 12 hours instead of 24
+    const sessionExpireTime = 1 * 60 * 60 * 1000; // 1 hour instead of 2
+    
+    // Check memory pressure first
+    const memoryUsage = process.memoryUsage();
+    const heapUsedMB = memoryUsage.heapUsed / 1024 / 1024;
+    
+    if (heapUsedMB > MEMORY_PRESSURE_THRESHOLD) {
+      console.warn(`Memory pressure detected: ${Math.round(heapUsedMB)}MB. Performing aggressive cleanup.`);
+      
+      // Force garbage collection
+      if (global.gc) {
+        global.gc();
+      }
+      
+      // More aggressive cleanup under memory pressure
+      for (const roomId in rooms) {
+        const room = rooms[roomId];
+        const roomAge = now - room.createdAt;
+        
+        if (roomAge > 6 * 60 * 60 * 1000 || room.participants.length === 0) { // 6 hours
+          delete rooms[roomId];
+        }
+      }
+      
+      // Clear all sessions under memory pressure
+      for (const sessionId in sessions) {
+        delete sessions[sessionId];
+      }
+      
+      console.log(`Aggressive cleanup completed. Memory usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+      return;
+    }
+    
+    // Normal cleanup
+    let roomsDeleted = 0;
+    for (const roomId in rooms) {
+      const room = rooms[roomId];
+      const roomAge = now - room.createdAt;
+      
+      if (roomAge > roomExpireTime || room.participants.length === 0) {
+        delete rooms[roomId];
+        roomsDeleted++;
+      }
+    }
+    
+    // Clean up old sessions
+    let sessionsDeleted = 0;
+    for (const sessionId in sessions) {
+      const session = sessions[sessionId];
+      const sessionAge = now - session.createdAt;
+      
+      if (sessionAge > sessionExpireTime) {
+        delete sessions[sessionId];
+        sessionsDeleted++;
+      }
+    }
+    
+    // Limit total rooms in memory
+    const roomIds = Object.keys(rooms);
+    if (roomIds.length > MAX_ROOMS_IN_MEMORY) {
+      const sortedRooms = roomIds
+        .map(id => ({ id, createdAt: rooms[id].createdAt }))
+        .sort((a, b) => a.createdAt - b.createdAt);
+      
+      const roomsToDelete = sortedRooms.slice(0, roomIds.length - MAX_ROOMS_IN_MEMORY);
+      roomsToDelete.forEach(room => {
+        delete rooms[room.id];
+        roomsDeleted++;
+      });
+    }
+    
+    if (roomsDeleted > 0 || sessionsDeleted > 0) {
+      console.log(`Memory cleanup: Deleted ${roomsDeleted} rooms, ${sessionsDeleted} sessions`);
+      console.log(`Current memory usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+    }
+    
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
+    }
+  } catch (error) {
+    console.error('Error during memory cleanup:', error);
+  }
+}
+
+function isRateLimited(roomId) {
+  // Check memory pressure - disable rate limiting when memory usage is low
+  const memoryUsage = process.memoryUsage();
+  const heapUsedMB = memoryUsage.heapUsed / 1024 / 1024;
+  
+  if (heapUsedMB < DISABLE_RATE_LIMIT_UNDER_MB) {
+    return false; // No rate limiting when memory usage is low
+  }
+  
+  const now = Date.now();
+  const roomData = attentionDataRateLimit.get(roomId) || { lastUpdate: 0, burstCount: 0, burstStart: now };
+  
+  // Reset burst count if window has passed
+  if (now - roomData.burstStart > BURST_WINDOW) {
+    roomData.burstCount = 0;
+    roomData.burstStart = now;
+  }
+  
+  // Check basic rate limit
+  if (now - roomData.lastUpdate < ATTENTION_RATE_LIMIT) {
+    return true;
+  }
+  
+  // Check burst limit
+  if (roomData.burstCount >= BURST_LIMIT) {
+    return true;
+  }
+  
+  // Update tracking
+  roomData.lastUpdate = now;
+  roomData.burstCount++;
+  attentionDataRateLimit.set(roomId, roomData);
+  
+  return false;
+}
 
 async function loadActiveRoomsFromDatabase() {
   try {
@@ -1140,6 +1309,28 @@ io.on('connection', (socket) => {
         return;
       }
       
+      // Check rate limiting
+      if (isRateLimited(roomId)) {
+        // Only log rate limiting every 50th occurrence to reduce spam
+        if (!global._rateLimitLogCount) global._rateLimitLogCount = 0;
+        global._rateLimitLogCount++;
+        
+        if (global._rateLimitLogCount % 50 === 0) {
+          console.log(`Rate limited attention data for room ${roomId} (${global._rateLimitLogCount} times)`);
+        }
+        return;
+      }
+      
+      // Check memory pressure
+      const memoryUsage = process.memoryUsage();
+      const heapUsedMB = memoryUsage.heapUsed / 1024 / 1024;
+      
+      if (heapUsedMB > MEMORY_PRESSURE_THRESHOLD) {
+        console.warn(`Memory pressure detected: ${Math.round(heapUsedMB)}MB. Skipping attention data processing.`);
+        cleanupMemory(); // Trigger immediate cleanup
+        return;
+      }
+      
       const meeting = await Meeting.findOne({ roomId });
       if (!meeting) {
         console.log(`No meeting found for room ${roomId}`);
@@ -1148,18 +1339,28 @@ io.on('connection', (socket) => {
       
       const attentionData = data.attentionData || {};
       
-      console.log(`Received attention data for room ${roomId}:`, 
-        Object.keys(attentionData).map(id => `${id}: ${attentionData[id]?.attentionState || 'unknown'}`).join(', '));
+      // Only log every 10th attention data update to reduce spam
+      if (!global._attentionLogCount) global._attentionLogCount = 0;
+      global._attentionLogCount++;
+      
+      if (global._attentionLogCount % 10 === 0) {
+        console.log(`Received attention data for room ${roomId}:`, 
+          Object.keys(attentionData).map(id => `${id}: ${attentionData[id]?.attentionState || 'unknown'}`).join(', '));
+      }
       
       if (Object.keys(attentionData).length > 0) {
         const result = await meeting.saveAttentionSnapshot(attentionData);
         if (result) {
-          console.log(`Saved attention snapshot for room ${roomId}`);
+          if (global._attentionLogCount % 10 === 0) {
+            console.log(`Saved attention snapshot for room ${roomId}`);
+          }
         } else {
           console.log(`Failed to save attention snapshot for room ${roomId}`);
         }
       } else {
-        console.log(`No attention data to save for room ${roomId}`);
+        if (global._attentionLogCount % 10 === 0) {
+          console.log(`No attention data to save for room ${roomId}`);
+        }
       }
     } catch (error) {
       console.error('Error saving attention data:', error);
@@ -1249,28 +1450,36 @@ io.on('connection', (socket) => {
 
 setInterval(async () => {
   try {
+    // Database cleanup
     const roomResult = await db.RoomService.cleanUp();
     console.log(`Cleaned up ${roomResult.deletedCount} old rooms from MongoDB`);
     
     const sessionResult = await db.SessionService.cleanUp();
     console.log(`Cleaned up ${sessionResult.deletedCount} old sessions from MongoDB`);
     
-  const now = new Date();
-  const expireTime = 24 * 60 * 60 * 1000;
-  
-  for (const roomId in rooms) {
-    const room = rooms[roomId];
-    const roomAge = now - room.createdAt;
+    // Memory cleanup
+    cleanupMemory();
     
-    if (roomAge > expireTime && room.participants.length === 0) {
-      delete rooms[roomId];
-        console.log(`Room expired and deleted from memory: ${roomId}`);
-      }
-    }
   } catch (error) {
     console.error('Error during cleanup:', error);
   }
-}, 60 * 60 * 1000);
+}, 10 * 60 * 1000); // Run every 10 minutes instead of 15 minutes
+
+// Additional memory cleanup every 2 minutes
+setInterval(() => {
+  cleanupMemory();
+}, 2 * 60 * 1000);
+
+// Emergency cleanup every 30 seconds if memory pressure is high
+setInterval(() => {
+  const memoryUsage = process.memoryUsage();
+  const heapUsedMB = memoryUsage.heapUsed / 1024 / 1024;
+  
+  if (heapUsedMB > MEMORY_PRESSURE_THRESHOLD) {
+    console.warn(`Emergency cleanup triggered. Memory usage: ${Math.round(heapUsedMB)}MB`);
+    cleanupMemory();
+  }
+}, 30 * 1000);
 
 const PORT = process.env.PORT || 3001;
 

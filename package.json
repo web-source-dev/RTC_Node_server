@@ -4,8 +4,8 @@
   "description": "WebRTC signaling server for video conferencing",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "start": "node --expose-gc --max-old-space-size=3072 --optimize-for-size index.js",
+    "dev": "nodemon --expose-gc --max-old-space-size=3072 --optimize-for-size index.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
