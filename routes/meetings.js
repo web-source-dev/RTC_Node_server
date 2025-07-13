@@ -126,7 +126,7 @@ router.get('/:id/analytics', auth, isInstructor, async (req, res) => {
       active: 0,
       looking_away: 0,
       drowsy: 0,
-      sleeping: 0,
+
       absent: 0,
       darkness: 0
     };
@@ -220,7 +220,7 @@ function processTimeSeriesData(snapshots) {
   console.log(`Processing ${snapshotsToProcess.length} snapshots for time series data (of ${snapshots.length} total)`);
   
   const validStates = [
-    'attentive', 'active', 'looking_away', 'drowsy', 'sleeping', 'absent', 'darkness'
+    'attentive', 'active', 'looking_away', 'drowsy', 'absent', 'darkness'
   ];
   
   snapshotsToProcess.forEach(snapshot => {

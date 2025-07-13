@@ -18,7 +18,7 @@ const participantSchema = new Schema({
     active: { type: Number, default: 0 },
     looking_away: { type: Number, default: 0 },
     drowsy: { type: Number, default: 0 },
-    sleeping: { type: Number, default: 0 },
+
     absent: { type: Number, default: 0 },
     darkness: { type: Number, default: 0 }
   },
@@ -183,7 +183,7 @@ meetingSchema.methods.saveAttentionSnapshot = async function(attentionData) {
               active: 0,
               looking_away: 0,
               drowsy: 0,
-              sleeping: 0,
+
               absent: 0,
               darkness: 0
             },
@@ -276,7 +276,7 @@ meetingSchema.methods.normalizeAttentionState = function(state) {
     'lookingaway': 'looking_away',
     'looking away': 'looking_away',
     'drowsy': 'drowsy',
-    'sleeping': 'sleeping',
+
     'absent': 'absent',
     'darkness': 'darkness'
   };
@@ -366,7 +366,7 @@ meetingSchema.methods.calculateStats = async function() {
       active: 0,
       looking_away: 0,
       drowsy: 0,
-      sleeping: 0,
+
       absent: 0,
       darkness: 0
     };
@@ -394,7 +394,7 @@ meetingSchema.methods.calculateStats = async function() {
       
       const attentiveTime = (participant.attentionData.attentive || 0) + (participant.attentionData.active || 0);
       const distractedTime = (participant.attentionData.looking_away || 0) + (participant.attentionData.drowsy || 0);
-      const absentTime = (participant.attentionData.absent || 0) + (participant.attentionData.sleeping || 0) + (participant.attentionData.darkness || 0);
+      const absentTime = (participant.attentionData.absent || 0) + (participant.attentionData.darkness || 0);
       
       const participantTotalTime = attentiveTime + distractedTime + absentTime;
       console.log(`Participant ${participant.userId} has ${participantTotalTime} seconds of attention data`);

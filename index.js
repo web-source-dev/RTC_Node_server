@@ -711,7 +711,7 @@ io.on('connection', (socket) => {
             active: 0,
             looking_away: 0,
             drowsy: 0,
-            sleeping: 0,
+
             absent: 0,
             darkness: 0
           },
@@ -874,7 +874,7 @@ io.on('connection', (socket) => {
                 active: 0,
                 looking_away: 0,
                 drowsy: 0,
-                sleeping: 0,
+
                 absent: 0,
                 darkness: 0
               },
@@ -1375,7 +1375,21 @@ io.on('connection', (socket) => {
         return;
       }
       
-      console.log(`Closing room ${roomId} and finalizing meeting records`);
+      // Check if user is the room creator
+      const room = rooms[roomId];
+      if (!room) {
+        console.log(`Room ${roomId} not found in memory`);
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+      
+      if (room.creatorId !== currentUser.id) {
+        console.log(`User ${currentUser.id} attempted to close room ${roomId} but is not the creator`);
+        socket.emit('error', { message: 'Only the room creator can end the meeting' });
+        return;
+      }
+      
+      console.log(`Room creator ${currentUser.id} is closing room ${roomId} and finalizing meeting records`);
       
       const meeting = await Meeting.findOne({ roomId });
       
@@ -1435,12 +1449,30 @@ io.on('connection', (socket) => {
         console.log(`No meeting found for room ${roomId}`);
       }
                         
+      // Notify ALL participants that the room has been closed
+      io.to(roomId).emit('room-closed', { roomId });
+      
+      // Send system message to all participants
+      io.to(roomId).emit('system-message', {
+        text: 'The meeting has been ended by the host',
+        timestamp: new Date().toISOString()
+      });
+      
+      // Force all participants to leave the room
+      const currentRoom = rooms[roomId];
+      if (currentRoom) {
+        currentRoom.participants.forEach(participant => {
+          io.to(participant.id).emit('user-left', { 
+            userId: participant.id,
+            reason: 'room_closed_by_host'
+          });
+        });
+      }
+      
       if (rooms[roomId]) {
         delete rooms[roomId];
         console.log(`Removed room ${roomId} from memory`);
       }
-      
-      socket.emit('room-closed', { roomId });
     } catch (error) {
       console.error('Error closing meeting record:', error);
       socket.emit('error', { message: 'Error closing room' });
