@@ -13,6 +13,7 @@ const auth = require('./middleware/auth');
 const User = require('./models/User');
 const AuthService = require('./services/AuthService');
 const meetingRoutes = require('./routes/meetings');
+const logRoutes = require('./routes/logs');
 const Meeting = require('./models/Meeting');
 
 dotenv.config();
@@ -34,6 +35,7 @@ app.use(cors());
 
 app.use('/api/auth', authRoutes);
 app.use('/api/meetings', meetingRoutes);
+app.use('/api/logs', logRoutes);
 
 if (process.env.NODE_ENV !== 'production') {
   app.get('/api/debug/rooms', (req, res) => {
@@ -542,11 +544,15 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('create-room', async ({ roomId: requestedRoomId, password, reconnect, userId, title }) => {
+  socket.on('create-room', async ({ roomId: requestedRoomId, password, reconnect, userId, title, className, displayName }) => {
     try {
       password = password || '';
       
-      console.log(`User ${socket.id} is creating${reconnect ? ' (reconnecting to)' : ''} a room${requestedRoomId ? ` with ID ${requestedRoomId}` : ''}`);
+      if (displayName) {
+        currentUser.displayName = displayName;
+      }
+      
+      console.log(`User ${socket.id} is creating${reconnect ? ' (reconnecting to)' : ''} a room${requestedRoomId ? ` with ID ${requestedRoomId}` : ''}${className ? ` with class name: ${className}` : ''}`);
       
       if (reconnect && requestedRoomId) {
         let existingRoom = rooms[requestedRoomId];
@@ -693,7 +699,7 @@ io.on('connection', (socket) => {
         
         const meeting = new Meeting({
           roomId: roomId,
-          title: title || 'Untitled Class',
+          title: className || title || 'Untitled Class',
           creator: user ? user._id : null,
           creatorName: currentUser.displayName || 'Anonymous',
           password: password || null,
@@ -735,6 +741,7 @@ io.on('connection', (socket) => {
       
       if (displayName) {
         currentUser.displayName = displayName;
+        console.log(`User ${socket.id} joining with display name: ${displayName}`);
       }
       
       if (currentUser.room) {
@@ -1394,12 +1401,22 @@ io.on('connection', (socket) => {
       const meeting = await Meeting.findOne({ roomId });
       
       if (meeting) {
+        console.log(`Found meeting for room ${roomId}:`, {
+          meetingId: meeting._id,
+          startTime: meeting.startTime,
+          endTime: meeting.endTime,
+          isActive: meeting.isActive
+        });
+        
         if (!meeting.endTime) {
+          const endTime = new Date();
+          console.log(`Setting end time for meeting ${meeting._id} to:`, endTime);
+          
           await Meeting.updateOne(
             { _id: meeting._id },
             {
               $set: {
-                endTime: new Date(),
+                endTime: endTime,
                 isActive: false
               }
             }
@@ -1407,7 +1424,7 @@ io.on('connection', (socket) => {
           
           console.log(`Set end time for meeting ${meeting._id} (room ${roomId})`);
         } else {
-          console.log(`Meeting ${meeting._id} already has an end time set`);
+          console.log(`Meeting ${meeting._id} already has an end time set:`, meeting.endTime);
         }
         
         const bulkOps = [];
@@ -1438,6 +1455,7 @@ io.on('connection', (socket) => {
         }
         
         try {
+          console.log(`Calculating final stats for meeting ${meeting._id}`);
           await meeting.calculateStats();
           console.log(`Calculated final stats for meeting ${meeting._id}`);
         } catch (statsError) {

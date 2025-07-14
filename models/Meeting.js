@@ -346,7 +346,7 @@ meetingSchema.methods.calculateStats = async function() {
         
         meetingDuration = Math.max(0, Math.floor(durationMs / 1000));
         
-        const MAX_DURATION = 2 * 60 * 60;
+        const MAX_DURATION = 2 * 60 * 60; // 2 hours max
         if (meetingDuration > MAX_DURATION) {
           console.warn(`Meeting ${this._id} has excessive duration: ${meetingDuration}s. Capping to ${MAX_DURATION}s`);
           meetingDuration = MAX_DURATION;

@@ -72,6 +72,21 @@ router.get('/:id', auth, isInstructor, async (req, res) => {
   }
 });
 
+// Get meeting by roomId (for logging)
+router.get('/by-room/:roomId', auth, async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const meeting = await Meeting.findOne({ roomId });
+    if (!meeting) {
+      return res.status(404).json({ success: false, message: 'Meeting not found' });
+    }
+    res.status(200).json({ success: true, data: meeting });
+  } catch (error) {
+    console.error('Error fetching meeting by room ID:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 router.get('/:id/analytics', auth, isInstructor, async (req, res) => {
   try {
     const meeting = await Meeting.findById(req.params.id);
@@ -92,34 +107,77 @@ router.get('/:id/analytics', auth, isInstructor, async (req, res) => {
 
     let duration = 0;
     if (meeting.startTime) {
+      console.log(`Calculating duration for meeting ${meeting._id}:`, {
+        startTime: meeting.startTime,
+        endTime: meeting.endTime,
+        isActive: meeting.isActive
+      });
+      
       if (meeting.endTime) {
         const endTime = new Date(meeting.endTime);
         const startTime = new Date(meeting.startTime);
         
+        console.log(`Meeting has end time. Calculating duration:`, {
+          startTime: startTime,
+          endTime: endTime,
+          startTimeMs: startTime.getTime(),
+          endTimeMs: endTime.getTime()
+        });
+        
         if (!isNaN(endTime.getTime()) && !isNaN(startTime.getTime())) {
-          duration = Math.max(0, Math.floor((endTime - startTime) / 1000));
+          const durationMs = endTime.getTime() - startTime.getTime();
+          duration = Math.max(0, Math.floor(durationMs / 1000));
           
-          const MAX_DURATION = 7 * 24 * 60 * 60;
+          console.log(`Duration calculation:`, {
+            durationMs: durationMs,
+            durationSeconds: duration
+          });
+          
+          const MAX_DURATION = 2 * 60 * 60; // 2 hours max
           if (duration > MAX_DURATION) {
             console.warn(`Meeting ${meeting._id} has excessive duration: ${duration}s. Capping to ${MAX_DURATION}s`);
             duration = MAX_DURATION;
           }
+        } else {
+          console.warn(`Invalid timestamps for meeting ${meeting._id}:`, {
+            startTimeValid: !isNaN(startTime.getTime()),
+            endTimeValid: !isNaN(endTime.getTime())
+          });
         }
       } else {    
         const now = new Date();
         const startTime = new Date(meeting.startTime);
         
+        console.log(`Meeting is active. Calculating current duration:`, {
+          startTime: startTime,
+          now: now,
+          startTimeMs: startTime.getTime(),
+          nowMs: now.getTime()
+        });
+        
         if (!isNaN(startTime.getTime())) {
-          duration = Math.max(0, Math.floor((now - startTime) / 1000));
+          const durationMs = now.getTime() - startTime.getTime();
+          duration = Math.max(0, Math.floor(durationMs / 1000));
           
-          const MAX_DURATION = 7 * 24 * 60 * 60;
+          console.log(`Current duration calculation:`, {
+            durationMs: durationMs,
+            durationSeconds: duration
+          });
+          
+          const MAX_DURATION = 2 * 60 * 60; // 2 hours max
           if (duration > MAX_DURATION) {
             console.warn(`Meeting ${meeting._id} has excessive duration: ${duration}s. Capping to ${MAX_DURATION}s`);
             duration = MAX_DURATION;
           }
+        } else {
+          console.warn(`Invalid start time for meeting ${meeting._id}:`, startTime);
         }
       }
+    } else {
+      console.warn(`Meeting ${meeting._id} has no start time`);
     }
+    
+    console.log(`Final duration for meeting ${meeting._id}: ${duration} seconds`);
     
     const defaultStates = {
       attentive: 0,
